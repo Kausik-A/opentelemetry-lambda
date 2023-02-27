@@ -6,12 +6,13 @@ on:
       - '*'
     branches:
       - main
-      - 
   pull_request:
     paths:
       - 'dotnet/**'
     branches:
       - main
+  workflow_dispatch:
+
 
 jobs:
   build:
