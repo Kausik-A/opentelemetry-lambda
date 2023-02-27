@@ -23,7 +23,7 @@ jobs:
         with:
           dotnet-version: '6.0.x'
       - name: Build .NET layer for arm64
-        run: GOARCH="arm64" ./build.sh
+        run: ls | GOARCH="arm64" ./build.sh
         working-directory: "dotnet"
       - name: Build .NET layer for amd64
         run: GOARCH="amd64" ./build.sh
