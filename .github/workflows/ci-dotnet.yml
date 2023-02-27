@@ -3,7 +3,7 @@ name: "Continuous Build (.NET)"
 on:
   push:
     paths:
-      - 'dotnet/**'
+      - '*'
     branches:
       - main
       - 
