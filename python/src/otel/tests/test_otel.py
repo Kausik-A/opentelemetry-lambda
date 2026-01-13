@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-This file tests that the `otel-instrument` script included in this repository
+This file tests that the `otel-handler` script included in this repository
 successfully instruments OTel Python in a mock Lambda environment.
 """
 
@@ -21,10 +21,10 @@ import fileinput
 import os
 import subprocess
 import sys
-from importlib import import_module
+from importlib import import_module, reload
 from shutil import which
 from unittest import mock
-
+from opentelemetry import propagate
 from opentelemetry.environment_variables import OTEL_PROPAGATORS
 from opentelemetry.instrumentation.aws_lambda import (
     _HANDLER,
@@ -45,6 +45,7 @@ from opentelemetry.trace.propagation.tracecontext import (
 )
 
 AWS_LAMBDA_EXEC_WRAPPER = "AWS_LAMBDA_EXEC_WRAPPER"
+AWS_LAMBDA_FUNCTION_NAME = "AWS_LAMBDA_FUNCTION_NAME"
 INIT_OTEL_SCRIPTS_DIR = os.path.join(
     *(os.path.dirname(__file__), "..", "otel_sdk")
 )
@@ -59,7 +60,7 @@ class MockLambdaContext:
 
 MOCK_LAMBDA_CONTEXT = MockLambdaContext(
     aws_request_id="mock_aws_request_id",
-    invoked_function_arn="arn://mock-lambda-function-arn",
+    invoked_function_arn="arn:aws:lambda:us-west-2:123456789012:function:my-function",
 )
 
 MOCK_XRAY_TRACE_ID = 0x5FB7331105E8BB83207FA31D4D9CDB4C
@@ -93,7 +94,7 @@ def replace_in_file(filename, old_text, new_text):
 
 def mock_aws_lambda_exec_wrapper():
     """Mocks automatically instrumenting user Lambda function by pointing
-    `AWS_LAMBDA_EXEC_WRAPPER` to the `otel-instrument` script.
+    `AWS_LAMBDA_EXEC_WRAPPER` to the `otel-handler` script.
 
     TODO: It would be better if `moto`'s `mock_lambda` supported setting
     AWS_LAMBDA_EXEC_WRAPPER so we could make the call to Lambda instead.
@@ -106,7 +107,7 @@ def mock_aws_lambda_exec_wrapper():
     # with instrumentation. In this test we just make sure we can complete auto
     # instrumentation without error and the correct environment variabels are
     # set. A future improvement might have us run `opentelemetry-instrument` in
-    # this process to imitate `otel-instrument`, but our lambda handler does not
+    # this process to imitate `otel-handler`, but our lambda handler does not
     # call other instrumented libraries so we have no use for it for now.
 
     print_environ_program = (
@@ -117,7 +118,7 @@ def mock_aws_lambda_exec_wrapper():
 
     completed_subprocess = subprocess.run(
         [
-            os.path.join(INIT_OTEL_SCRIPTS_DIR, "otel-instrument"),
+            os.path.join(INIT_OTEL_SCRIPTS_DIR, "otel-handler"),
             "python3",
             "-c",
             print_environ_program,
@@ -127,7 +128,7 @@ def mock_aws_lambda_exec_wrapper():
         text=True,
     )
 
-    # NOTE: Because `otel-instrument` cannot affect this python environment, we
+    # NOTE: Because `otel-handler` cannot affect this python environment, we
     # parse the stdout produced by our test python program to update the
     # environment in this parent python process.
 
@@ -171,6 +172,11 @@ class TestAwsLambdaInstrumentor(TestBase):
         super().setUpClass()
         sys.path.append(INIT_OTEL_SCRIPTS_DIR)
         replace_in_file(
+            os.path.join(INIT_OTEL_SCRIPTS_DIR, "otel-handler"),
+            'export LAMBDA_LAYER_PKGS_DIR="/opt/python"',
+            f'export LAMBDA_LAYER_PKGS_DIR="{TOX_PYTHON_DIRECTORY}"',
+        )
+        replace_in_file(
             os.path.join(INIT_OTEL_SCRIPTS_DIR, "otel-instrument"),
             'export LAMBDA_LAYER_PKGS_DIR="/opt/python"',
             f'export LAMBDA_LAYER_PKGS_DIR="{TOX_PYTHON_DIRECTORY}"',
@@ -182,6 +188,7 @@ class TestAwsLambdaInstrumentor(TestBase):
             "os.environ",
             {
                 AWS_LAMBDA_EXEC_WRAPPER: "mock_aws_lambda_exec_wrapper",
+                AWS_LAMBDA_FUNCTION_NAME: "test-func",
                 _HANDLER: "mocks.lambda_function.handler",
             },
         )
@@ -197,6 +204,11 @@ class TestAwsLambdaInstrumentor(TestBase):
         super().tearDownClass()
         sys.path.remove(INIT_OTEL_SCRIPTS_DIR)
         replace_in_file(
+            os.path.join(INIT_OTEL_SCRIPTS_DIR, "otel-handler"),
+            f'export LAMBDA_LAYER_PKGS_DIR="{TOX_PYTHON_DIRECTORY}"',
+            'export LAMBDA_LAYER_PKGS_DIR="/opt/python"',
+        )
+        replace_in_file(
             os.path.join(INIT_OTEL_SCRIPTS_DIR, "otel-instrument"),
             f'export LAMBDA_LAYER_PKGS_DIR="{TOX_PYTHON_DIRECTORY}"',
             'export LAMBDA_LAYER_PKGS_DIR="/opt/python"',
@@ -209,9 +221,13 @@ class TestAwsLambdaInstrumentor(TestBase):
                 **os.environ,
                 # Using Active tracing
                 _X_AMZN_TRACE_ID: MOCK_XRAY_TRACE_CONTEXT_SAMPLED,
+                OTEL_PROPAGATORS: "xray-lambda"
             },
         )
         test_env_patch.start()
+
+        # try to load propagators based on the OTEL_PROPAGATORS env var
+        reload(propagate)
 
         mock_execute_lambda()
 
@@ -227,8 +243,8 @@ class TestAwsLambdaInstrumentor(TestBase):
         self.assertSpanHasAttributes(
             span,
             {
-                ResourceAttributes.FAAS_ID: MOCK_LAMBDA_CONTEXT.invoked_function_arn,
-                SpanAttributes.FAAS_EXECUTION: MOCK_LAMBDA_CONTEXT.aws_request_id,
+                ResourceAttributes.CLOUD_RESOURCE_ID: MOCK_LAMBDA_CONTEXT.invoked_function_arn,
+                SpanAttributes.FAAS_INVOCATION_ID: MOCK_LAMBDA_CONTEXT.aws_request_id,
             },
         )
 
@@ -265,6 +281,9 @@ class TestAwsLambdaInstrumentor(TestBase):
             },
         )
         test_env_patch.start()
+
+        # try to load propagators based on the OTEL_PROPAGATORS env var
+        reload(propagate)
 
         mock_execute_lambda(
             {

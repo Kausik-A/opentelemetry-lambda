@@ -17,6 +17,7 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"github.com/open-telemetry/opentelemetry-lambda/collector/lambdalifecycle"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -42,11 +43,12 @@ type collectorWrapper interface {
 }
 
 type manager struct {
-	logger          *zap.Logger
-	collector       collectorWrapper
-	extensionClient *extensionapi.Client
-	listener        *telemetryapi.Listener
-	wg              sync.WaitGroup
+	logger             *zap.Logger
+	collector          collectorWrapper
+	extensionClient    *extensionapi.Client
+	listener           *telemetryapi.Listener
+	wg                 sync.WaitGroup
+	lifecycleListeners []lambdalifecycle.Listener
 }
 
 func NewManager(ctx context.Context, logger *zap.Logger, version string) (context.Context, *manager) {
@@ -73,7 +75,7 @@ func NewManager(ctx context.Context, logger *zap.Logger, version string) (contex
 	}
 
 	telemetryClient := telemetryapi.NewClient(logger)
-	_, err = telemetryClient.Subscribe(ctx, res.ExtensionID, addr)
+	_, err = telemetryClient.Subscribe(ctx, []telemetryapi.EventType{telemetryapi.Platform}, res.ExtensionID, addr)
 	if err != nil {
 		logger.Fatal("Cannot register Telemetry API client", zap.Error(err))
 	}
@@ -83,12 +85,6 @@ func NewManager(ctx context.Context, logger *zap.Logger, version string) (contex
 		extensionClient: extensionClient,
 		listener:        listener,
 	}
-
-	go func() {
-		if err := lm.processEvents(ctx); err != nil {
-			lm.logger.Warn("Failed to process events", zap.Error(err))
-		}
-	}()
 
 	factories, _ := lambdacomponents.Components(res.ExtensionID)
 	lm.collector = collector.NewCollector(logger, factories, version)
@@ -105,12 +101,17 @@ func (lm *manager) Run(ctx context.Context) error {
 		return err
 	}
 
+	lm.wg.Add(1)
+	go func() {
+		if err := lm.processEvents(ctx); err != nil {
+			lm.logger.Warn("Failed to process events", zap.Error(err))
+		}
+	}()
 	lm.wg.Wait()
 	return nil
 }
 
 func (lm *manager) processEvents(ctx context.Context) error {
-	lm.wg.Add(1)
 	defer lm.wg.Done()
 
 	for {
@@ -132,6 +133,7 @@ func (lm *manager) processEvents(ctx context.Context) error {
 			// Exit if we receive a SHUTDOWN event
 			if res.EventType == extensionapi.Shutdown {
 				lm.logger.Info("Received SHUTDOWN event")
+				lm.notifyEnvironmentShutdown()
 				lm.listener.Shutdown()
 				err = lm.collector.Stop()
 				if err != nil {
@@ -142,10 +144,37 @@ func (lm *manager) processEvents(ctx context.Context) error {
 				return err
 			}
 
+			lm.notifyFunctionInvoked()
+
 			err = lm.listener.Wait(ctx, res.RequestID)
 			if err != nil {
 				lm.logger.Error("problem waiting for platform.runtimeDone event", zap.Error(err), zap.String("requestID", res.RequestID))
 			}
+
+			// Check other components are ready before allowing the freezing of the environment.
+			lm.notifyFunctionFinished()
 		}
 	}
+}
+
+func (lm *manager) notifyFunctionInvoked() {
+	for _, listener := range lm.lifecycleListeners {
+		listener.FunctionInvoked()
+	}
+}
+
+func (lm *manager) notifyFunctionFinished() {
+	for _, listener := range lm.lifecycleListeners {
+		listener.FunctionFinished()
+	}
+}
+
+func (lm *manager) notifyEnvironmentShutdown() {
+	for _, listener := range lm.lifecycleListeners {
+		listener.EnvironmentShutdown()
+	}
+}
+
+func (lm *manager) AddListener(listener lambdalifecycle.Listener) {
+	lm.lifecycleListeners = append(lm.lifecycleListeners, listener)
 }

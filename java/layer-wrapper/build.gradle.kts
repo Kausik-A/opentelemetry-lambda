@@ -10,12 +10,12 @@ dependencies {
     runtimeOnly("io.opentelemetry:opentelemetry-exporter-otlp")
     runtimeOnly("io.opentelemetry:opentelemetry-extension-trace-propagators")
     runtimeOnly("io.opentelemetry:opentelemetry-sdk-extension-autoconfigure")
-    runtimeOnly("io.opentelemetry:opentelemetry-sdk-extension-aws")
+    runtimeOnly("io.opentelemetry.contrib:opentelemetry-aws-resources")
 }
 
 tasks {
     val createLayer by registering(Zip::class) {
-        archiveFileName.set("opentelemetry-java-wrapper.zip")
+        archiveFileName.set("opentelemetry-javawrapper-layer.zip")
         destinationDirectory.set(file("$buildDir/distributions"))
 
         from(configurations["runtimeClasspath"]) {
@@ -30,7 +30,13 @@ tasks {
         from("scripts")
     }
 
-    val assemble by existing {
+    named("assemble") {
         dependsOn(createLayer)
+    }
+}
+
+tasks.register("printOtelJavaInstrumentationVersion") {
+    doLast {
+        println(project.configurations["runtimeClasspath"].resolvedConfiguration.resolvedArtifacts.find {  it.name == "opentelemetry-aws-lambda-events-2.2" }?.moduleVersion?.id?.version)
     }
 }

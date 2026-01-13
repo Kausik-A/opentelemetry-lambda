@@ -1,3 +1,5 @@
+//go:build !lambdacomponents.custom
+
 // Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,21 +18,21 @@ package lambdacomponents
 
 import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusremotewriteexporter"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/basicauthextension"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/sigv4authextension"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/probabilisticsamplerprocessor"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/spanprocessor"
-	"go.opentelemetry.io/collector/exporter"
-	"go.opentelemetry.io/collector/exporter/loggingexporter"
+	"github.com/open-telemetry/opentelemetry-lambda/collector/processor/decoupleprocessor"
+	"go.opentelemetry.io/collector/exporter/debugexporter"
 	"go.opentelemetry.io/collector/exporter/otlpexporter"
 	"go.opentelemetry.io/collector/exporter/otlphttpexporter"
-	"go.opentelemetry.io/collector/extension"
 	"go.opentelemetry.io/collector/otelcol"
 	"go.opentelemetry.io/collector/processor"
+	"go.opentelemetry.io/collector/processor/batchprocessor"
 	"go.opentelemetry.io/collector/processor/memorylimiterprocessor"
-	"go.opentelemetry.io/collector/receiver"
 	"go.opentelemetry.io/collector/receiver/otlpreceiver"
 	"go.uber.org/multierr"
 
@@ -41,7 +43,7 @@ import (
 func Components(extensionID string) (otelcol.Factories, error) {
 	var errs []error
 
-	receivers, err := receiver.MakeFactoryMap(
+	receivers, err := otelcol.MakeFactoryMap(
 		otlpreceiver.NewFactory(),
 		telemetryapireceiver.NewFactory(extensionID),
 	)
@@ -49,8 +51,8 @@ func Components(extensionID string) (otelcol.Factories, error) {
 		errs = append(errs, err)
 	}
 
-	exporters, err := exporter.MakeFactoryMap(
-		loggingexporter.NewFactory(),
+	exporters, err := otelcol.MakeFactoryMap(
+		debugexporter.NewFactory(),
 		otlpexporter.NewFactory(),
 		otlphttpexporter.NewFactory(),
 		prometheusremotewriteexporter.NewFactory(),
@@ -59,7 +61,7 @@ func Components(extensionID string) (otelcol.Factories, error) {
 		errs = append(errs, err)
 	}
 
-	processors, err := processor.MakeFactoryMap(
+	processors, err := otelcol.MakeFactoryMap[processor.Factory](
 		attributesprocessor.NewFactory(),
 		filterprocessor.NewFactory(),
 		memorylimiterprocessor.NewFactory(),
@@ -67,13 +69,16 @@ func Components(extensionID string) (otelcol.Factories, error) {
 		resourceprocessor.NewFactory(),
 		spanprocessor.NewFactory(),
 		coldstartprocessor.NewFactory(),
+		decoupleprocessor.NewFactory(),
+		batchprocessor.NewFactory(),
 	)
 	if err != nil {
 		errs = append(errs, err)
 	}
 
-	extensions, err := extension.MakeFactoryMap(
+	extensions, err := otelcol.MakeFactoryMap(
 		sigv4authextension.NewFactory(),
+		basicauthextension.NewFactory(),
 	)
 	if err != nil {
 		errs = append(errs, err)

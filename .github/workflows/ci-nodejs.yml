@@ -4,23 +4,28 @@ on:
   push:
     paths:
       - 'nodejs/**'
+      - '.github/workflows/ci-nodejs.yml'
     branches:
       - main
   pull_request:
     paths:
       - 'nodejs/**'
+      - '.github/workflows/ci-nodejs.yml'
     branches:
       - main
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
         with:
-          node-version: 14
-      - uses: actions/cache@v3
+          node-version: 18
+      - uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: ~/.npm
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
@@ -28,3 +33,10 @@ jobs:
             ${{ runner.os }}-node-
       - run: npm install
         working-directory: nodejs
+      - run: npm run lint
+        working-directory: nodejs
+      - run: npm test
+        working-directory: nodejs
+      - name: Build AWS SDK Sample
+        run: npm run build
+        working-directory: nodejs/sample-apps/aws-sdk

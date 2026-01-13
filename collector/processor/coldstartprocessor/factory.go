@@ -30,13 +30,14 @@ const (
 )
 
 var (
+	Type                  = component.MustNewType(typeStr)
 	errConfigNotColdstart = errors.New("config was not a Coldstart processor config")
 	processorCapabilities = consumer.Capabilities{MutatesData: true}
 )
 
 func NewFactory() processor.Factory {
 	return processor.NewFactory(
-		typeStr,
+		Type,
 		createDefaultConfig,
 		processor.WithTraces(createTracesProcessor, stability),
 	)
@@ -46,7 +47,7 @@ func createDefaultConfig() component.Config {
 	return &Config{}
 }
 
-func createTracesProcessor(ctx context.Context, params processor.CreateSettings, rConf component.Config, next consumer.Traces) (processor.Traces, error) {
+func createTracesProcessor(ctx context.Context, params processor.Settings, rConf component.Config, next consumer.Traces) (processor.Traces, error) {
 	cfg, ok := rConf.(*Config)
 	if !ok {
 		return nil, errConfigNotColdstart
@@ -56,7 +57,7 @@ func createTracesProcessor(ctx context.Context, params processor.CreateSettings,
 	if err != nil {
 		return nil, err
 	}
-	return processorhelper.NewTracesProcessor(
+	return processorhelper.NewTraces(
 		ctx,
 		params,
 		cfg,

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -27,8 +28,9 @@ import (
 	"go.uber.org/zap"
 )
 
-const defaultListenerPort = "53612"
-const initialQueueSize = 5
+const (
+	initialQueueSize = 5
+)
 
 // Listener is used to listen to the Telemetry API
 type Listener struct {
@@ -46,26 +48,41 @@ func NewListener(logger *zap.Logger) *Listener {
 	}
 }
 
+func (s *Listener) bindListener() (net.Listener, string, error) {
+	listenerAddr := listenOnAddress()
+	l, err := net.Listen("tcp", listenerAddr+":0")
+	if err != nil {
+		return nil, "", err
+	}
+	addr := fmt.Sprintf("%s:%d", listenerAddr, l.Addr().(*net.TCPAddr).Port)
+	return l, addr, nil
+}
+
 func listenOnAddress() string {
 	envAwsLocal, ok := os.LookupEnv("AWS_SAM_LOCAL")
-	var addr string
 	if ok && envAwsLocal == "true" {
-		addr = ":" + defaultListenerPort
+		return ""
 	} else {
-		addr = "sandbox:" + defaultListenerPort
+		return "sandbox.localdomain"
 	}
-
-	return addr
 }
 
 // Start the server in a goroutine where the log events will be sent
 func (s *Listener) Start() (string, error) {
-	address := listenOnAddress()
+	listener, address, err := s.bindListener()
+	if err != nil {
+		return "", fmt.Errorf("failed to find available port: %w", err)
+	}
 	s.logger.Info("Listening for requests", zap.String("address", address))
-	s.httpServer = &http.Server{Addr: address}
-	http.HandleFunc("/", s.httpHandler)
+	mux := http.NewServeMux()
+	s.httpServer = &http.Server{
+		Addr:    address,
+		Handler: mux,
+	}
+	mux.HandleFunc("/", s.httpHandler)
+
 	go func() {
-		err := s.httpServer.ListenAndServe()
+		err := s.httpServer.Serve(listener)
 		if err != http.ErrServerClosed {
 			s.logger.Error("Unexpected stop on HTTP Server", zap.Error(err))
 			s.Shutdown()
